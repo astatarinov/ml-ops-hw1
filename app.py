@@ -1,32 +1,13 @@
 from fastapi import FastAPI
-from pydantic import BaseModel
-from typing import Union, TypedDict, Literal
-# for models
+from typing import Union, Literal
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 from sklearn.linear_model import Lasso
-from sklearn.tree import DecisionTreeRegressor
 from sklearn.ensemble import RandomForestRegressor
-from sklearn.model_selection import cross_val_score
 from pydantic import BaseModel
-from enum import Enum
 import datetime as dt
 
 app = FastAPI()
-
-
-# class WineModelException(Exception):
-#     """
-#     Base class exception for my ML models server
-#     """
-#     pass
-#
-# class WrongModelName(WineModelException):
-#     """
-#     Raised when trying to use unavailable ML model
-#     """
-#     def __init__(self, input_model):
 
 
 class RandomForestParams(BaseModel):
@@ -68,7 +49,40 @@ class LearningParams(BaseModel):
     fit_name: Union[str, None]
 
 
-df = pd.read_csv('winequality-red.csv')
+class WineFeatures(BaseModel):
+    fixed_acidity: float
+    volatile_acidity: float
+    citric_acid: float
+    residual_sugar: float
+    chlorides: float
+    free_sulfur_dioxide: float
+    total_sulfur_dioxide: float
+    density: float
+    pH: float
+    sulphates: float
+    alcohol: float
+    quality: float
+
+
+class PredictArgs(BaseModel):
+    ml_class: Literal['Lasso', 'RandomForest']
+    fit_name: str
+    features: WineFeatures
+
+
+class DeletingArgs(BaseModel):
+    ml_class: Literal['Lasso', 'RandomForest']
+    fit_name: str
+
+
+df = pd.read_csv('winequality-red.csv').rename(columns={
+    'fixed acidity': 'fixed_acidity',
+    'volatile acidity': 'volatile_acidity',
+    'citric acid': 'citric_acid',
+    'residual sugar': 'residual_sugar',
+    'free sulfur dioxide': 'free_sulfur_dioxide',
+    'total sulfur dioxide': 'total_sulfur_dioxide',}
+)
 
 X = df.drop(['quality'], axis=1)
 y = df.quality
@@ -83,7 +97,10 @@ ml_dict = {
 
 @app.get("/")
 def say_hello():
-    return "Hello, man! It's server for Artem's ml-ops hw"
+    """
+    Says hello
+    """
+    return "Hi, bro! It's server for Artem's ml-ops hw"
 
 
 @app.get("/available_models")
@@ -118,6 +135,7 @@ def fit_model(learning_params: LearningParams) -> dict:
         return {'fit_name': exist_name, 'already_fitted': 1}
     # if not - let's fit one
     if not fit_name:
+        # creating unique fit name via datetime
         fit_name = f"{model_name}-{dt.datetime.now().strftime('%Y-%m-%d-%H-%M')}"
 
     model = ml_dict[model_name]['class'](**model_params)
@@ -125,3 +143,58 @@ def fit_model(learning_params: LearningParams) -> dict:
 
     ml_dict[model_name]['models'][fit_name] = {'fit': model, 'params': model_params}
     return {'fit_name': fit_name, 'already_fitted': 0}
+
+
+@app.get("/fitted_models")
+def fitted_models():
+    """
+    :return: list of dicts with all fitted models
+    """
+    fitted_list = []
+    for ml_class in ml_dict.keys():
+        for fit_name in ml_dict[ml_class]['models'].keys():
+            fitted_list.append(
+                {
+                    'fit_name': fit_name,
+                    'class': ml_class,
+                    'params': ml_dict[ml_class]['models'][fit_name]['params']
+                }
+            )
+    return fitted_list
+
+
+@app.post("/predict")
+def predict(predict_args: PredictArgs):
+    """
+    :param predict_args: dict
+    {
+    'ml_class': str # name of ml model class
+    'fit_name': str # name of fitted model to predict
+    'features': dict # wine features to predict quality
+    }
+    :return:
+    """
+    ml_class = predict_args.ml_class
+    fit_name = predict_args.fit_name
+    predict_args = predict_args.features.dict()
+    model = ml_dict[ml_class]['models'][fit_name]['fit']
+
+    predicted_value = model.predict(pd.DataFrame(predict_args, index=[0]))[0]
+
+    return {'predicted_value': predicted_value}
+
+
+@app.post("/delete_fit")
+def delete_fit(deleting_args: DeletingArgs):
+    """
+    Deletes fit by fit_name if exists
+
+    :param deleting_args: class and name of fitted model to delete
+    :return: -
+    """
+    ml_class = deleting_args.ml_class
+    fit_name = deleting_args.fit_name
+    try:
+        ml_dict[ml_class]['models'].pop(fit_name)
+    except KeyError:
+        pass
